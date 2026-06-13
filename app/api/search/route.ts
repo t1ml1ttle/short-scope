@@ -2,18 +2,23 @@ import { NextRequest } from "next/server";
 
 const API_KEY = process.env.YOUTUBE_API_KEY;
 
-// simple in-memory cache (resets on server restart)
-let cache: any = {
-  items: [],
-  nextPageToken: null,
-  lastQuery: "",
-};
+// =====================
+// CONFIG
+// =====================
+const CACHE_TTL = 1000 * 60 * 15; // 15 minutes
+const cache: Record<
+  string,
+  { data: any; timestamp: number }
+> = {};
 
+// =====================
+// FETCH WITH RETRY
+// =====================
 async function fetchWithRetry(url: string, retries = 2) {
   for (let i = 0; i <= retries; i++) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
+      const timeout = setTimeout(() => controller.abort(), 15000);
 
       const res = await fetch(url, {
         cache: "no-store",
@@ -22,7 +27,6 @@ async function fetchWithRetry(url: string, retries = 2) {
 
       clearTimeout(timeout);
 
-      // 🔥 IMPORTANT: show real API error
       if (!res.ok) {
         const text = await res.text();
         console.log("YouTube API ERROR:", res.status, text);
@@ -36,21 +40,29 @@ async function fetchWithRetry(url: string, retries = 2) {
   }
 }
 
+// =====================
+// ROUTE HANDLER
+// =====================
 export async function GET(req: NextRequest) {
-  const query = req.nextUrl.searchParams.get("q") || "";
-  const pageToken = req.nextUrl.searchParams.get("pageToken") || "";
+  const query = req.nextUrl.searchParams.get("q")?.trim() || "";
+  const pageToken =
+    req.nextUrl.searchParams.get("pageToken") || "";
 
-  const isFirstPage = !pageToken;
-  const isSameQuery = cache.lastQuery === query;
+  const cacheKey = `${query}_${pageToken}`;
+  const cached = cache[cacheKey];
 
-  // 🔥 return cache instantly for repeated searches
-  if (isFirstPage && isSameQuery && cache.items.length > 0) {
-    return Response.json(cache);
+  // =====================
+  // RETURN CACHE IF VALID
+  // =====================
+  if (
+    cached &&
+    Date.now() - cached.timestamp < CACHE_TTL
+  ) {
+    return Response.json(cached.data);
   }
 
-  // 🔥 check API key early
   if (!API_KEY) {
-    console.error("❌ Missing YOUTUBE_API_KEY in .env.local");
+    console.error("❌ Missing YOUTUBE_API_KEY");
     return Response.json({
       items: [],
       nextPageToken: null,
@@ -60,7 +72,8 @@ export async function GET(req: NextRequest) {
 
   try {
     const url =
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&order=date` +
+      `https://www.googleapis.com/youtube/v3/search` +
+      `?part=snippet&type=video&maxResults=10&order=date` +
       `&q=${encodeURIComponent(query)}` +
       `&key=${API_KEY}` +
       (pageToken ? `&pageToken=${pageToken}` : "");
@@ -72,18 +85,22 @@ export async function GET(req: NextRequest) {
       nextPageToken: data.nextPageToken || null,
     };
 
-    // 🔥 only cache FIRST PAGE (prevents broken pagination)
-    if (isFirstPage) {
-      cache = {
-        ...result,
-        lastQuery: query,
-      };
-    }
+    // =====================
+    // STORE IN CACHE
+    // =====================
+    cache[cacheKey] = {
+      data: result,
+      timestamp: Date.now(),
+    };
 
     return Response.json(result);
   } catch (err) {
-    console.log("API FAILED → returning cache:", err);
+    console.log("API FAILED → fallback error:", err);
 
-    return Response.json(cache);
+    return Response.json({
+      items: [],
+      nextPageToken: null,
+      error: "Failed to fetch results",
+    });
   }
 }
