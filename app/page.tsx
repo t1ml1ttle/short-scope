@@ -56,7 +56,7 @@ export default function Home() {
         margin: "0 auto",
       }}
     >
-      <h1>YouTube Shorts Tracker</h1>
+      <h1>Short Scope</h1>
 
       {/* SEARCH BAR */}
       <div
