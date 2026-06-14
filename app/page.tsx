@@ -9,6 +9,10 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<"list" | "grid">("list");
 
+  // 🔴 LIVE RADAR MODE
+  const [liveMode, setLiveMode] = useState(false);
+  const seenVideos = useRef(new Set<string>());
+
   // prevents duplicate requests
   const searchLock = useRef(false);
 
@@ -39,17 +43,48 @@ export default function Home() {
     }
   }
 
-  // 🚨 IMPORTANT CHANGE:
-  // DO NOT auto-call API on page load anymore
+  // 🔴 LIVE RADAR LOOP
   useEffect(() => {
-    // optional: you can preload cached UI later if needed
-  }, []);
+    if (!liveMode) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/search?q=${encodeURIComponent(query)}`
+        );
+
+        const data = await res.json();
+
+        const newItems = (data.items || []).filter((video: any) => {
+          const id = video.id?.videoId;
+          if (!id) return false;
+
+          if (seenVideos.current.has(id)) return false;
+
+          seenVideos.current.add(id);
+          return true;
+        });
+
+        if (newItems.length > 0) {
+          setResults((prev) => [...newItems, ...prev]);
+        }
+      } catch (err) {
+        console.error("Live Radar error:", err);
+      }
+    }, 90000); // 90 seconds
+
+    return () => clearInterval(interval);
+  }, [liveMode, query]);
 
   const handleNewSearch = () => {
     if (loading) return;
 
     setResults([]);
     setPageToken(null);
+
+    // reset live tracking
+    seenVideos.current.clear();
+
     search(true);
   };
 
@@ -70,6 +105,7 @@ export default function Home() {
           display: "flex",
           gap: 10,
           marginBottom: 20,
+          alignItems: "center",
         }}
       >
         <input
@@ -85,6 +121,21 @@ export default function Home() {
 
         <button onClick={handleNewSearch} disabled={loading}>
           {loading ? "Searching..." : "Search"}
+        </button>
+
+        {/* 🔴 LIVE RADAR TOGGLE */}
+        <button
+          onClick={() => setLiveMode((prev) => !prev)}
+          style={{
+            padding: "8px 12px",
+            background: liveMode ? "red" : "#eee",
+            color: liveMode ? "white" : "black",
+            borderRadius: 8,
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          {liveMode ? "Live 🔴" : "Live Off"}
         </button>
       </div>
 
