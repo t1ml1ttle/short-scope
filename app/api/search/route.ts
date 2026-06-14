@@ -3,9 +3,6 @@ import https from "https";
 
 const API_KEY = process.env.YOUTUBE_API_KEY;
 
-// ==========================
-// SIMPLE CACHE
-// ==========================
 type CacheEntry = {
   data: any;
   timestamp: number;
@@ -27,61 +24,36 @@ function getCache(key: string) {
 }
 
 function setCache(key: string, data: any) {
-  cache.set(key, {
-    data,
-    timestamp: Date.now(),
-  });
+  cache.set(key, { data, timestamp: Date.now() });
 }
 
-// ==========================
-// STABLE YOUTUBE FETCH (NO fetch/undici)
-// ==========================
+// ✅ SINGLE CLEAN REQUEST ONLY (NO TIMEOUTS)
 function fetchYouTube(url: string): Promise<any> {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, (res) => {
-      let data = "";
+    https
+      .get(url, (res) => {
+        let data = "";
 
-      res.on("data", (chunk) => {
-        data += chunk;
-      });
+        res.on("data", (chunk) => (data += chunk));
 
-      res.on("end", () => {
-        try {
-          const json = JSON.parse(data);
-
-          // 🔥 DEBUG: show actual YouTube response
-          console.log("YOUTUBE RESPONSE STATUS:", res.statusCode);
-          console.log("YOUTUBE RESPONSE BODY:", json);
-
-          resolve(json);
-        } catch (err) {
-          console.log("JSON PARSE ERROR:", data);
-          reject(err);
-        }
-      });
-    });
-
-    req.on("error", (err) => {
-      console.log("HTTPS ERROR:", err);
-      reject(err);
-    });
-
-    req.setTimeout(10000, () => {
-      req.destroy(new Error("Request timeout"));
-    });
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(e);
+          }
+        });
+      })
+      .on("error", reject);
   });
 }
 
-// ==========================
-// ROUTE HANDLER
-// ==========================
 export async function GET(req: NextRequest) {
   const query = req.nextUrl.searchParams.get("q") || "";
   const pageToken = req.nextUrl.searchParams.get("pageToken") || "";
 
   const cacheKey = `${query}-${pageToken}`;
 
-  // cache hit
   const cached = getCache(cacheKey);
   if (cached) {
     return Response.json({ ...cached, cached: true });
@@ -90,7 +62,7 @@ export async function GET(req: NextRequest) {
   if (!API_KEY) {
     return Response.json({
       items: [],
-      error: "Missing YOUTUBE_API_KEY in .env.local",
+      error: "Missing API key",
     });
   }
 
@@ -103,33 +75,12 @@ export async function GET(req: NextRequest) {
 
     const data = await fetchYouTube(url);
 
-    // 🔥 IMPORTANT: log full API result
-    console.log("FINAL YOUTUBE DATA:", data);
-
-    if (!data.items) {
-      return Response.json({
-        items: [],
-        error: data.error?.message || "No items returned from YouTube",
-      });
-    }
-
-    const result = {
-      items: data.items,
+    return Response.json({
+      items: data.items || [],
       nextPageToken: data.nextPageToken || null,
-    };
-
-    setCache(cacheKey, result);
-
-    return Response.json(result);
+    });
   } catch (err: any) {
-    console.log("YOUTUBE REQUEST FAILED:", err);
-
-    // fallback cache search
-    for (const [key, value] of cache.entries()) {
-      if (key.startsWith(query)) {
-        return Response.json({ ...value.data, stale: true });
-      }
-    }
+    console.log("YOUTUBE ERROR:", err);
 
     return Response.json({
       items: [],
