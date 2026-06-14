@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function Home() {
   const [results, setResults] = useState<any[]>([]);
@@ -9,9 +9,13 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<"list" | "grid">("list");
 
-  async function search(reset = true) {
-    if (loading) return;
+  // prevents duplicate requests
+  const searchLock = useRef(false);
 
+  async function search(reset = true) {
+    if (loading || searchLock.current) return;
+
+    searchLock.current = true;
     setLoading(true);
 
     try {
@@ -22,9 +26,6 @@ export default function Home() {
       const res = await fetch(url);
       const data = await res.json();
 
-      console.log("Items:", data.items?.length);
-      console.log("Next Page Token:", data.nextPageToken);
-
       setResults((prev) =>
         reset ? data.items || [] : [...prev, ...(data.items || [])]
       );
@@ -34,14 +35,19 @@ export default function Home() {
       console.error("Search failed:", error);
     } finally {
       setLoading(false);
+      searchLock.current = false;
     }
   }
 
+  // 🚨 IMPORTANT CHANGE:
+  // DO NOT auto-call API on page load anymore
   useEffect(() => {
-    search(true);
+    // optional: you can preload cached UI later if needed
   }, []);
 
   const handleNewSearch = () => {
+    if (loading) return;
+
     setResults([]);
     setPageToken(null);
     search(true);
