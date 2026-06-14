@@ -2,158 +2,137 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type Video = {
-  id?: {
-    videoId?: string;
-  };
-  snippet?: {
-    title?: string;
-    channelTitle?: string;
-  };
-};
-
 export default function Home() {
+  const [results, setResults] = useState<any[]>([]);
   const [query, setQuery] = useState("shorts");
-  const [results, setResults] = useState<Video[]>([]);
   const [pageToken, setPageToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<"list" | "grid">("list");
+
   const [autoRefresh, setAutoRefresh] = useState(false);
 
-  const seenVideos = useRef(new Set<string>());
+  const searchLock = useRef(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const seenVideos = useRef(new Set<string>());
 
+  // =========================
+  // SEARCH FUNCTION (STABLE)
+  // =========================
   async function search(reset = true) {
-    if (loading) return;
+    if (loading || searchLock.current) return;
 
+    searchLock.current = true;
     setLoading(true);
 
     try {
-      const params = new URLSearchParams();
+      const url =
+        `/api/search?q=${encodeURIComponent(query)}` +
+        (reset ? "" : `&pageToken=${pageToken || ""}`);
 
-      params.set("q", query);
-
-      if (!reset && pageToken) {
-        params.set("pageToken", pageToken);
-      }
-
-      const res = await fetch(`/api/search?${params.toString()}`);
-
+      const res = await fetch(url);
       const data = await res.json();
 
-      if (!res.ok) {
+      if (!res.ok || data.error) {
         throw new Error(data.error || "Search failed");
       }
 
-      const incoming = (data.items || []).filter((video: Video) => {
+      const items = data.items || [];
+
+      // remove duplicates
+      const filtered = items.filter((video: any) => {
         const id = video.id?.videoId;
-
         if (!id) return false;
-
         if (seenVideos.current.has(id)) return false;
 
         seenVideos.current.add(id);
-
         return true;
       });
 
-      if (reset) {
-        setResults(incoming);
-      } else {
-        setResults((prev) => [...prev, ...incoming]);
-      }
-
+      setResults((prev) => (reset ? filtered : [...prev, ...filtered]));
       setPageToken(data.nextPageToken || null);
-    } catch (err) {
-      console.error(err);
-      alert(
-        err instanceof Error ? err.message : "Unknown search error"
-      );
+    } catch (error) {
+      console.error("Search failed:", error);
     } finally {
       setLoading(false);
+      searchLock.current = false;
     }
   }
 
-  function handleSearch() {
-    seenVideos.current.clear();
-    setResults([]);
-    setPageToken(null);
-
-    search(true);
-  }
-
+  // =========================
+  // AUTO REFRESH (SAFE)
+  // =========================
   useEffect(() => {
     if (!autoRefresh) return;
 
     intervalRef.current = setInterval(() => {
-      seenVideos.current.clear();
       search(true);
-    }, 180000);
+    }, 180000); // 3 min
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
+      if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [autoRefresh, query]);
+
+  const handleNewSearch = () => {
+    if (loading) return;
+
+    setResults([]);
+    setPageToken(null);
+    seenVideos.current.clear();
+
+    search(true);
+  };
 
   return (
     <main
       style={{
-        maxWidth: 1000,
-        margin: "0 auto",
         padding: 20,
         fontFamily: "sans-serif",
+        maxWidth: 900,
+        margin: "0 auto",
       }}
     >
       <h1>Short Scope</h1>
 
-      <div
-        style={{
-          display: "flex",
-          gap: 10,
-          marginBottom: 20,
-          flexWrap: "wrap",
-        }}
-      >
+      {/* SEARCH BAR */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search Shorts..."
-          style={{
-            flex: 1,
-            minWidth: 250,
-            padding: 10,
-          }}
+          style={{ padding: 10, flex: 1, maxWidth: 400 }}
         />
 
-        <button onClick={handleSearch} disabled={loading}>
+        <button onClick={handleNewSearch} disabled={loading}>
           {loading ? "Searching..." : "Search"}
         </button>
 
         <button
-          onClick={() => setAutoRefresh((v) => !v)}
+          onClick={() => setAutoRefresh((p) => !p)}
           style={{
-            background: autoRefresh ? "green" : "#ddd",
+            padding: "8px 12px",
+            background: autoRefresh ? "green" : "#eee",
             color: autoRefresh ? "white" : "black",
-            border: "none",
-            padding: "10px 14px",
             borderRadius: 8,
+            border: "none",
+            cursor: "pointer",
           }}
         >
           {autoRefresh ? "Auto On" : "Auto Off"}
         </button>
       </div>
 
+      {/* VIEW TOGGLE */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
         <button
           onClick={() => setView("list")}
           style={{
-            padding: "8px 16px",
             background: view === "list" ? "#000" : "#eee",
             color: view === "list" ? "#fff" : "#000",
-            border: "none",
+            padding: "8px 16px",
             borderRadius: 8,
+            border: "none",
+            cursor: "pointer",
           }}
         >
           List
@@ -162,24 +141,25 @@ export default function Home() {
         <button
           onClick={() => setView("grid")}
           style={{
-            padding: "8px 16px",
             background: view === "grid" ? "#000" : "#eee",
             color: view === "grid" ? "#fff" : "#000",
-            border: "none",
+            padding: "8px 16px",
             borderRadius: 8,
+            border: "none",
+            cursor: "pointer",
           }}
         >
           Grid
         </button>
       </div>
 
-      <p>Results: {results.length}</p>
+      <p style={{ opacity: 0.7 }}>Results: {results.length}</p>
 
+      {/* RESULTS */}
       {view === "list" ? (
         <div>
-          {results.map((video, index) => {
+          {results.map((video: any, index: number) => {
             const videoId = video.id?.videoId;
-
             if (!videoId) return null;
 
             return (
@@ -190,33 +170,30 @@ export default function Home() {
                 rel="noopener noreferrer"
                 style={{
                   display: "flex",
-                  gap: 12,
+                  gap: 10,
+                  marginBottom: 12,
                   padding: 10,
-                  marginBottom: 10,
                   border: "1px solid #ddd",
-                  borderRadius: 10,
+                  borderRadius: 8,
                   textDecoration: "none",
                   color: "black",
+                  alignItems: "center",
                 }}
               >
                 <img
                   src={`https://img.youtube.com/vi/${videoId}/mqdefault.jpg`}
                   width={120}
                   height={70}
-                  alt=""
+                  style={{ borderRadius: 6, objectFit: "cover" }}
                 />
 
                 <div>
-                  <div>{video.snippet?.title}</div>
-
-                  <div
-                    style={{
-                      fontSize: 12,
-                      opacity: 0.7,
-                    }}
-                  >
+                  <h3 style={{ margin: 0, fontSize: 14 }}>
+                    {video.snippet?.title}
+                  </h3>
+                  <p style={{ margin: 0, fontSize: 12, opacity: 0.7 }}>
                     {video.snippet?.channelTitle}
-                  </div>
+                  </p>
                 </div>
               </a>
             );
@@ -226,14 +203,12 @@ export default function Home() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns:
-              "repeat(auto-fill,minmax(180px,1fr))",
-            gap: 12,
+            gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+            gap: 5,
           }}
         >
-          {results.map((video, index) => {
+          {results.map((video: any, index: number) => {
             const videoId = video.id?.videoId;
-
             if (!videoId) return null;
 
             return (
@@ -245,26 +220,20 @@ export default function Home() {
                 >
                   <img
                     src={`https://img.youtube.com/vi/${videoId}/hqdefault.jpg`}
-                    alt=""
                     style={{
                       width: "100%",
-                      aspectRatio: "4/5",
+                      aspectRatio: "4 / 5",
                       objectFit: "cover",
                       borderRadius: 12,
                     }}
                   />
                 </a>
 
-                <div style={{ marginTop: 5 }}>
+                <div style={{ fontSize: 14, marginTop: 5 }}>
                   {video.snippet?.title}
                 </div>
 
-                <div
-                  style={{
-                    fontSize: 12,
-                    opacity: 0.7,
-                  }}
-                >
+                <div style={{ fontSize: 12, opacity: 0.6 }}>
                   {video.snippet?.channelTitle}
                 </div>
               </div>
@@ -273,16 +242,13 @@ export default function Home() {
         </div>
       )}
 
+      {/* LOAD MORE */}
       {pageToken && (
-        <div
-          style={{
-            marginTop: 30,
-            textAlign: "center",
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "center", marginTop: 30 }}>
           <button
-            disabled={loading}
             onClick={() => search(false)}
+            disabled={loading}
+            style={{ padding: "12px 24px" }}
           >
             {loading ? "Loading..." : "Load More"}
           </button>

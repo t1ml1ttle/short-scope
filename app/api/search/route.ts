@@ -1,22 +1,21 @@
 import { NextRequest } from "next/server";
+import https from "https";
 
 const API_KEY = process.env.YOUTUBE_API_KEY;
 
+// ==========================
+// SIMPLE IN-MEMORY CACHE
+// ==========================
 type CacheEntry = {
-  data: {
-    items: any[];
-    nextPageToken: string | null;
-  };
+  data: any;
   timestamp: number;
 };
 
 const cache = new Map<string, CacheEntry>();
-
-const CACHE_TTL = 1000 * 60 * 10; // 10 minutes
+const CACHE_TTL = 1000 * 60 * 10; // 10 min
 
 function getCache(key: string) {
   const entry = cache.get(key);
-
   if (!entry) return null;
 
   if (Date.now() - entry.timestamp > CACHE_TTL) {
@@ -27,97 +26,69 @@ function getCache(key: string) {
   return entry.data;
 }
 
-function setCache(key: string, data: CacheEntry["data"]) {
+function setCache(key: string, data: any) {
   cache.set(key, {
     data,
     timestamp: Date.now(),
   });
 }
 
-async function fetchYouTube(url: string) {
-  const controller = new AbortController();
+// ==========================
+// STABLE YOUTUBE FETCH (NO UNDICI)
+// ==========================
+function fetchYouTube(url: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, (res) => {
+      let data = "";
 
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, 15000);
+      res.on("data", (chunk) => {
+        data += chunk;
+      });
 
-  try {
-    const res = await fetch(url, {
-      cache: "no-store",
-      signal: controller.signal,
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (err) {
+          reject(err);
+        }
+      });
     });
 
-    if (!res.ok) {
-      const text = await res.text();
+    req.on("error", reject);
 
-      console.error("========== YOUTUBE API ERROR ==========");
-      console.error("Status:", res.status);
-      console.error("Response:", text);
-      console.error("=======================================");
-
-      throw new Error(`YouTube API failed (${res.status})`);
-    }
-
-    return await res.json();
-  } finally {
-    clearTimeout(timeout);
-  }
+    req.setTimeout(10000, () => {
+      req.destroy(new Error("Request timeout"));
+    });
+  });
 }
 
+// ==========================
+// ROUTE
+// ==========================
 export async function GET(req: NextRequest) {
-  const query = req.nextUrl.searchParams.get("q")?.trim() || "";
+  const query = req.nextUrl.searchParams.get("q") || "";
   const pageToken = req.nextUrl.searchParams.get("pageToken") || "";
-
-  if (!query) {
-    return Response.json({
-      items: [],
-      nextPageToken: null,
-      error: "Missing query",
-    });
-  }
-
-  if (!API_KEY) {
-    console.error("YOUTUBE_API_KEY missing");
-
-    return Response.json(
-      {
-        items: [],
-        nextPageToken: null,
-        error: "Missing YOUTUBE_API_KEY",
-      },
-      { status: 500 }
-    );
-  }
 
   const cacheKey = `${query}-${pageToken}`;
 
+  // 1. cache hit
   const cached = getCache(cacheKey);
-
   if (cached) {
-    return Response.json({
-      ...cached,
-      cached: true,
-    });
+    return Response.json({ ...cached, cached: true });
+  }
+
+  if (!API_KEY) {
+    return Response.json({ items: [], error: "Missing API key" });
   }
 
   try {
     const url =
-      "https://www.googleapis.com/youtube/v3/search?" +
-      new URLSearchParams({
-        part: "snippet",
-        type: "video",
-        order: "date",
-        maxResults: "25",
-        q: query,
-        key: API_KEY,
-        ...(pageToken ? { pageToken } : {}),
-      });
-
-    console.time(`youtube:${query}`);
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=date&maxResults=10` +
+      `&q=${encodeURIComponent(query)}` +
+      `&key=${API_KEY}` +
+      (pageToken ? `&pageToken=${pageToken}` : "");
 
     const data = await fetchYouTube(url);
-
-    console.timeEnd(`youtube:${query}`);
 
     const result = {
       items: data.items || [],
@@ -127,26 +98,19 @@ export async function GET(req: NextRequest) {
     setCache(cacheKey, result);
 
     return Response.json(result);
-  } catch (error: any) {
-    console.error("SEARCH ROUTE ERROR");
-    console.error(error);
+  } catch (err) {
+    console.log("API FAILED → serving fallback");
 
-    const stale = cache.get(cacheKey);
-
-    if (stale) {
-      return Response.json({
-        ...stale.data,
-        stale: true,
-      });
+    // fallback cache search
+    for (const [key, value] of cache.entries()) {
+      if (key.startsWith(query)) {
+        return Response.json({ ...value.data, stale: true });
+      }
     }
 
-    return Response.json(
-      {
-        items: [],
-        nextPageToken: null,
-        error: error?.message || "Unknown error",
-      },
-      { status: 500 }
-    );
+    return Response.json({
+      items: [],
+      error: "No data available",
+    });
   }
 }
