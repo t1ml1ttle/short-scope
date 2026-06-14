@@ -2,138 +2,158 @@
 
 import { useEffect, useRef, useState } from "react";
 
+type Video = {
+  id?: {
+    videoId?: string;
+  };
+  snippet?: {
+    title?: string;
+    channelTitle?: string;
+  };
+};
+
 export default function Home() {
-  const [results, setResults] = useState<any[]>([]);
   const [query, setQuery] = useState("shorts");
+  const [results, setResults] = useState<Video[]>([]);
   const [pageToken, setPageToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<"list" | "grid">("list");
-
-  // 🔴 SAFE MODE (replaces Live Radar)
   const [autoRefresh, setAutoRefresh] = useState(false);
 
-  const searchLock = useRef(false);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const seenVideos = useRef(new Set<string>());
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // =========================
-  // MAIN SEARCH FUNCTION
-  // =========================
   async function search(reset = true) {
-    if (loading || searchLock.current) return;
+    if (loading) return;
 
-    searchLock.current = true;
     setLoading(true);
 
     try {
-      const url =
-        `/api/search?q=${encodeURIComponent(query)}` +
-        (reset ? "" : `&pageToken=${pageToken || ""}`);
+      const params = new URLSearchParams();
 
-      const res = await fetch(url);
+      params.set("q", query);
+
+      if (!reset && pageToken) {
+        params.set("pageToken", pageToken);
+      }
+
+      const res = await fetch(`/api/search?${params.toString()}`);
+
       const data = await res.json();
 
-      const items = data.items || [];
+      if (!res.ok) {
+        throw new Error(data.error || "Search failed");
+      }
 
-      // prevent duplicates globally
-      const filtered = items.filter((video: any) => {
+      const incoming = (data.items || []).filter((video: Video) => {
         const id = video.id?.videoId;
+
         if (!id) return false;
+
         if (seenVideos.current.has(id)) return false;
 
         seenVideos.current.add(id);
+
         return true;
       });
 
-      setResults((prev) =>
-        reset ? filtered : [...prev, ...filtered]
-      );
+      if (reset) {
+        setResults(incoming);
+      } else {
+        setResults((prev) => [...prev, ...incoming]);
+      }
 
       setPageToken(data.nextPageToken || null);
-    } catch (error) {
-      console.error("Search failed:", error);
+    } catch (err) {
+      console.error(err);
+      alert(
+        err instanceof Error ? err.message : "Unknown search error"
+      );
     } finally {
       setLoading(false);
-      searchLock.current = false;
     }
   }
 
-  // =========================
-  // SAFE AUTO REFRESH (NO SPAM)
-  // =========================
+  function handleSearch() {
+    seenVideos.current.clear();
+    setResults([]);
+    setPageToken(null);
+
+    search(true);
+  }
+
   useEffect(() => {
     if (!autoRefresh) return;
 
     intervalRef.current = setInterval(() => {
-      search(true); // refresh whole feed safely
-    }, 180000); // 3 minutes (SAFE for quota)
+      seenVideos.current.clear();
+      search(true);
+    }, 180000);
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
     };
   }, [autoRefresh, query]);
-
-  const handleNewSearch = () => {
-    if (loading) return;
-
-    setResults([]);
-    setPageToken(null);
-    seenVideos.current.clear();
-
-    search(true);
-  };
 
   return (
     <main
       style={{
+        maxWidth: 1000,
+        margin: "0 auto",
         padding: 20,
         fontFamily: "sans-serif",
-        maxWidth: 900,
-        margin: "0 auto",
       }}
     >
       <h1>Short Scope</h1>
 
-      {/* SEARCH BAR */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          marginBottom: 20,
+          flexWrap: "wrap",
+        }}
+      >
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search Shorts..."
-          style={{ padding: 10, flex: 1, maxWidth: 400 }}
+          style={{
+            flex: 1,
+            minWidth: 250,
+            padding: 10,
+          }}
         />
 
-        <button onClick={handleNewSearch} disabled={loading}>
+        <button onClick={handleSearch} disabled={loading}>
           {loading ? "Searching..." : "Search"}
         </button>
 
-        {/* SAFE AUTO REFRESH TOGGLE */}
         <button
-          onClick={() => setAutoRefresh((p) => !p)}
+          onClick={() => setAutoRefresh((v) => !v)}
           style={{
-            padding: "8px 12px",
-            background: autoRefresh ? "green" : "#eee",
+            background: autoRefresh ? "green" : "#ddd",
             color: autoRefresh ? "white" : "black",
-            borderRadius: 8,
             border: "none",
-            cursor: "pointer",
+            padding: "10px 14px",
+            borderRadius: 8,
           }}
         >
           {autoRefresh ? "Auto On" : "Auto Off"}
         </button>
       </div>
 
-      {/* VIEW TOGGLE */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
         <button
           onClick={() => setView("list")}
           style={{
+            padding: "8px 16px",
             background: view === "list" ? "#000" : "#eee",
             color: view === "list" ? "#fff" : "#000",
-            padding: "8px 16px",
-            borderRadius: 8,
             border: "none",
-            cursor: "pointer",
+            borderRadius: 8,
           }}
         >
           List
@@ -142,25 +162,24 @@ export default function Home() {
         <button
           onClick={() => setView("grid")}
           style={{
+            padding: "8px 16px",
             background: view === "grid" ? "#000" : "#eee",
             color: view === "grid" ? "#fff" : "#000",
-            padding: "8px 16px",
-            borderRadius: 8,
             border: "none",
-            cursor: "pointer",
+            borderRadius: 8,
           }}
         >
           Grid
         </button>
       </div>
 
-      <p style={{ opacity: 0.7 }}>Results: {results.length}</p>
+      <p>Results: {results.length}</p>
 
-      {/* RESULTS */}
       {view === "list" ? (
         <div>
-          {results.map((video: any, index: number) => {
+          {results.map((video, index) => {
             const videoId = video.id?.videoId;
+
             if (!videoId) return null;
 
             return (
@@ -171,30 +190,33 @@ export default function Home() {
                 rel="noopener noreferrer"
                 style={{
                   display: "flex",
-                  gap: 10,
-                  marginBottom: 12,
+                  gap: 12,
                   padding: 10,
+                  marginBottom: 10,
                   border: "1px solid #ddd",
-                  borderRadius: 8,
+                  borderRadius: 10,
                   textDecoration: "none",
                   color: "black",
-                  alignItems: "center",
                 }}
               >
                 <img
                   src={`https://img.youtube.com/vi/${videoId}/mqdefault.jpg`}
                   width={120}
                   height={70}
-                  style={{ borderRadius: 6, objectFit: "cover" }}
+                  alt=""
                 />
 
                 <div>
-                  <h3 style={{ margin: 0, fontSize: 14 }}>
-                    {video.snippet?.title}
-                  </h3>
-                  <p style={{ margin: 0, fontSize: 12, opacity: 0.7 }}>
+                  <div>{video.snippet?.title}</div>
+
+                  <div
+                    style={{
+                      fontSize: 12,
+                      opacity: 0.7,
+                    }}
+                  >
                     {video.snippet?.channelTitle}
-                  </p>
+                  </div>
                 </div>
               </a>
             );
@@ -204,12 +226,14 @@ export default function Home() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
-            gap: 5,
+            gridTemplateColumns:
+              "repeat(auto-fill,minmax(180px,1fr))",
+            gap: 12,
           }}
         >
-          {results.map((video: any, index: number) => {
+          {results.map((video, index) => {
             const videoId = video.id?.videoId;
+
             if (!videoId) return null;
 
             return (
@@ -221,20 +245,26 @@ export default function Home() {
                 >
                   <img
                     src={`https://img.youtube.com/vi/${videoId}/hqdefault.jpg`}
+                    alt=""
                     style={{
                       width: "100%",
-                      aspectRatio: "4 / 5",
+                      aspectRatio: "4/5",
                       objectFit: "cover",
                       borderRadius: 12,
                     }}
                   />
                 </a>
 
-                <div style={{ fontSize: 14, marginTop: 5 }}>
+                <div style={{ marginTop: 5 }}>
                   {video.snippet?.title}
                 </div>
 
-                <div style={{ fontSize: 12, opacity: 0.6 }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    opacity: 0.7,
+                  }}
+                >
                   {video.snippet?.channelTitle}
                 </div>
               </div>
@@ -243,13 +273,16 @@ export default function Home() {
         </div>
       )}
 
-      {/* LOAD MORE */}
       {pageToken && (
-        <div style={{ display: "flex", justifyContent: "center", marginTop: 30 }}>
+        <div
+          style={{
+            marginTop: 30,
+            textAlign: "center",
+          }}
+        >
           <button
-            onClick={() => search(false)}
             disabled={loading}
-            style={{ padding: "12px 24px" }}
+            onClick={() => search(false)}
           >
             {loading ? "Loading..." : "Load More"}
           </button>
