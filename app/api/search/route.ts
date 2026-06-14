@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const url =
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=date&maxResults=10` +
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=date&maxResults=50` +
       `&q=${encodeURIComponent(query)}` +
       `&key=${API_KEY}` +
       (pageToken ? `&pageToken=${pageToken}` : "");
