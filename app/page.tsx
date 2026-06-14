@@ -9,13 +9,16 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<"list" | "grid">("list");
 
-  // 🔴 LIVE RADAR MODE
-  const [liveMode, setLiveMode] = useState(false);
+  // 🔴 SAFE MODE (replaces Live Radar)
+  const [autoRefresh, setAutoRefresh] = useState(false);
+
+  const searchLock = useRef(false);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const seenVideos = useRef(new Set<string>());
 
-  // prevents duplicate requests
-  const searchLock = useRef(false);
-
+  // =========================
+  // MAIN SEARCH FUNCTION
+  // =========================
   async function search(reset = true) {
     if (loading || searchLock.current) return;
 
@@ -30,8 +33,20 @@ export default function Home() {
       const res = await fetch(url);
       const data = await res.json();
 
+      const items = data.items || [];
+
+      // prevent duplicates globally
+      const filtered = items.filter((video: any) => {
+        const id = video.id?.videoId;
+        if (!id) return false;
+        if (seenVideos.current.has(id)) return false;
+
+        seenVideos.current.add(id);
+        return true;
+      });
+
       setResults((prev) =>
-        reset ? data.items || [] : [...prev, ...(data.items || [])]
+        reset ? filtered : [...prev, ...filtered]
       );
 
       setPageToken(data.nextPageToken || null);
@@ -43,46 +58,26 @@ export default function Home() {
     }
   }
 
-  // 🔴 LIVE RADAR LOOP
+  // =========================
+  // SAFE AUTO REFRESH (NO SPAM)
+  // =========================
   useEffect(() => {
-    if (!liveMode) return;
+    if (!autoRefresh) return;
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(
-          `/api/search?q=${encodeURIComponent(query)}`
-        );
+    intervalRef.current = setInterval(() => {
+      search(true); // refresh whole feed safely
+    }, 180000); // 3 minutes (SAFE for quota)
 
-        const data = await res.json();
-
-        const newItems = (data.items || []).filter((video: any) => {
-          const id = video.id?.videoId;
-          if (!id) return false;
-
-          if (seenVideos.current.has(id)) return false;
-
-          seenVideos.current.add(id);
-          return true;
-        });
-
-        if (newItems.length > 0) {
-          setResults((prev) => [...newItems, ...prev]);
-        }
-      } catch (err) {
-        console.error("Live Radar error:", err);
-      }
-    }, 90000); // 90 seconds
-
-    return () => clearInterval(interval);
-  }, [liveMode, query]);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [autoRefresh, query]);
 
   const handleNewSearch = () => {
     if (loading) return;
 
     setResults([]);
     setPageToken(null);
-
-    // reset live tracking
     seenVideos.current.clear();
 
     search(true);
@@ -100,42 +95,31 @@ export default function Home() {
       <h1>Short Scope</h1>
 
       {/* SEARCH BAR */}
-      <div
-        style={{
-          display: "flex",
-          gap: 10,
-          marginBottom: 20,
-          alignItems: "center",
-        }}
-      >
+      <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search Shorts..."
-          style={{
-            padding: 10,
-            flex: 1,
-            maxWidth: 400,
-          }}
+          style={{ padding: 10, flex: 1, maxWidth: 400 }}
         />
 
         <button onClick={handleNewSearch} disabled={loading}>
           {loading ? "Searching..." : "Search"}
         </button>
 
-        {/* 🔴 LIVE RADAR TOGGLE */}
+        {/* SAFE AUTO REFRESH TOGGLE */}
         <button
-          onClick={() => setLiveMode((prev) => !prev)}
+          onClick={() => setAutoRefresh((p) => !p)}
           style={{
             padding: "8px 12px",
-            background: liveMode ? "red" : "#eee",
-            color: liveMode ? "white" : "black",
+            background: autoRefresh ? "green" : "#eee",
+            color: autoRefresh ? "white" : "black",
             borderRadius: 8,
             border: "none",
             cursor: "pointer",
           }}
         >
-          {liveMode ? "Live 🔴" : "Live Off"}
+          {autoRefresh ? "Auto On" : "Auto Off"}
         </button>
       </div>
 
@@ -152,7 +136,7 @@ export default function Home() {
             cursor: "pointer",
           }}
         >
-          List View
+          List
         </button>
 
         <button
@@ -166,16 +150,15 @@ export default function Home() {
             cursor: "pointer",
           }}
         >
-          Grid View
+          Grid
         </button>
       </div>
 
-      {/* RESULTS COUNT */}
       <p style={{ opacity: 0.7 }}>Results: {results.length}</p>
 
       {/* RESULTS */}
       {view === "list" ? (
-        <div style={{ marginTop: 20 }}>
+        <div>
           {results.map((video: any, index: number) => {
             const videoId = video.id?.videoId;
             if (!videoId) return null;
@@ -209,7 +192,6 @@ export default function Home() {
                   <h3 style={{ margin: 0, fontSize: 14 }}>
                     {video.snippet?.title}
                   </h3>
-
                   <p style={{ margin: 0, fontSize: 12, opacity: 0.7 }}>
                     {video.snippet?.channelTitle}
                   </p>
@@ -221,7 +203,6 @@ export default function Home() {
       ) : (
         <div
           style={{
-            marginTop: 20,
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
             gap: 5,
@@ -249,21 +230,9 @@ export default function Home() {
                   />
                 </a>
 
-                <a
-                  href={`https://youtube.com/shorts/${videoId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: "block",
-                    marginTop: 8,
-                    textDecoration: "none",
-                    color: "#000",
-                    fontWeight: 500,
-                    fontSize: 14,
-                  }}
-                >
+                <div style={{ fontSize: 14, marginTop: 5 }}>
                   {video.snippet?.title}
-                </a>
+                </div>
 
                 <div style={{ fontSize: 12, opacity: 0.6 }}>
                   {video.snippet?.channelTitle}
@@ -276,31 +245,15 @@ export default function Home() {
 
       {/* LOAD MORE */}
       {pageToken && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            marginTop: 30,
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "center", marginTop: 30 }}>
           <button
             onClick={() => search(false)}
             disabled={loading}
-            style={{
-              padding: "12px 24px",
-              fontSize: 16,
-              cursor: loading ? "not-allowed" : "pointer",
-            }}
+            style={{ padding: "12px 24px" }}
           >
             {loading ? "Loading..." : "Load More"}
           </button>
         </div>
-      )}
-
-      {!pageToken && results.length > 0 && (
-        <p style={{ textAlign: "center", marginTop: 30, opacity: 0.6 }}>
-          No more results available.
-        </p>
       )}
     </main>
   );
