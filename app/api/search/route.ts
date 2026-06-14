@@ -4,7 +4,7 @@ import https from "https";
 const API_KEY = process.env.YOUTUBE_API_KEY;
 
 // ==========================
-// SIMPLE IN-MEMORY CACHE
+// SIMPLE CACHE
 // ==========================
 type CacheEntry = {
   data: any;
@@ -12,7 +12,7 @@ type CacheEntry = {
 };
 
 const cache = new Map<string, CacheEntry>();
-const CACHE_TTL = 1000 * 60 * 10; // 10 min
+const CACHE_TTL = 1000 * 60 * 10;
 
 function getCache(key: string) {
   const entry = cache.get(key);
@@ -34,7 +34,7 @@ function setCache(key: string, data: any) {
 }
 
 // ==========================
-// STABLE YOUTUBE FETCH (NO UNDICI)
+// STABLE YOUTUBE FETCH (NO fetch/undici)
 // ==========================
 function fetchYouTube(url: string): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -47,14 +47,24 @@ function fetchYouTube(url: string): Promise<any> {
 
       res.on("end", () => {
         try {
-          resolve(JSON.parse(data));
+          const json = JSON.parse(data);
+
+          // 🔥 DEBUG: show actual YouTube response
+          console.log("YOUTUBE RESPONSE STATUS:", res.statusCode);
+          console.log("YOUTUBE RESPONSE BODY:", json);
+
+          resolve(json);
         } catch (err) {
+          console.log("JSON PARSE ERROR:", data);
           reject(err);
         }
       });
     });
 
-    req.on("error", reject);
+    req.on("error", (err) => {
+      console.log("HTTPS ERROR:", err);
+      reject(err);
+    });
 
     req.setTimeout(10000, () => {
       req.destroy(new Error("Request timeout"));
@@ -63,7 +73,7 @@ function fetchYouTube(url: string): Promise<any> {
 }
 
 // ==========================
-// ROUTE
+// ROUTE HANDLER
 // ==========================
 export async function GET(req: NextRequest) {
   const query = req.nextUrl.searchParams.get("q") || "";
@@ -71,14 +81,17 @@ export async function GET(req: NextRequest) {
 
   const cacheKey = `${query}-${pageToken}`;
 
-  // 1. cache hit
+  // cache hit
   const cached = getCache(cacheKey);
   if (cached) {
     return Response.json({ ...cached, cached: true });
   }
 
   if (!API_KEY) {
-    return Response.json({ items: [], error: "Missing API key" });
+    return Response.json({
+      items: [],
+      error: "Missing YOUTUBE_API_KEY in .env.local",
+    });
   }
 
   try {
@@ -90,16 +103,26 @@ export async function GET(req: NextRequest) {
 
     const data = await fetchYouTube(url);
 
+    // 🔥 IMPORTANT: log full API result
+    console.log("FINAL YOUTUBE DATA:", data);
+
+    if (!data.items) {
+      return Response.json({
+        items: [],
+        error: data.error?.message || "No items returned from YouTube",
+      });
+    }
+
     const result = {
-      items: data.items || [],
+      items: data.items,
       nextPageToken: data.nextPageToken || null,
     };
 
     setCache(cacheKey, result);
 
     return Response.json(result);
-  } catch (err) {
-    console.log("API FAILED → serving fallback");
+  } catch (err: any) {
+    console.log("YOUTUBE REQUEST FAILED:", err);
 
     // fallback cache search
     for (const [key, value] of cache.entries()) {
@@ -110,7 +133,7 @@ export async function GET(req: NextRequest) {
 
     return Response.json({
       items: [],
-      error: "No data available",
+      error: err?.message || "YouTube request failed",
     });
   }
 }
