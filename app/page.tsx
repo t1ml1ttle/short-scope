@@ -254,6 +254,16 @@ export default function Home() {
           </button>
         </div>
       )}
+      <footer style={{ marginTop: 40, fontSize: 12, opacity: 0.7 }}>
+        <p>
+          Short Scope uses YouTube Data API Services to search and display publicly available YouTube content.
+        </p>
+
+        <a href="/privacy" style={{ color: "#1a73e8" }}>
+          Privacy Policy
+        </a>
+      </footer>
     </main>
   );
 }
+
